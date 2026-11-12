@@ -79,6 +79,17 @@ describe('feedback export', () => {
   });
 });
 
+describe('deployment files', () => {
+  it('config files have no UTF-8 BOM (Vercel cannot parse package.json with a BOM)', async () => {
+    const { readFileSync } = await import('node:fs');
+    for (const f of ['package.json', 'package-lock.json', 'vercel.json', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json']) {
+      const bytes = readFileSync(new URL(`../../${f}`, import.meta.url));
+      expect(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf, f).toBe(false);
+      expect(() => JSON.parse(bytes.toString('utf8')), f).not.toThrow();
+    }
+  });
+});
+
 describe('dates', () => {
   it('validates real dates and formats them', () => {
     expect(isValidIsoDate('2024-02-29')).toBe(true);
