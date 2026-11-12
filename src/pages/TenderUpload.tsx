@@ -1,103 +1,204 @@
-import { useContext, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AppContext } from '../context/AppContext';
-import type { Tender } from '../context/AppContext';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, FileText, Plus, Trash2, Upload, Lock, Loader2 } from 'lucide-react';
+import { useI18n } from '../i18n/useI18n';
+import { useApp } from '../context/appState';
 import { demoTender } from '../data/demoTender';
-import { createAssessment } from '../utils/assessment';
-import { Upload, FileText, CheckCircle, ArrowRight, AlertCircle } from 'lucide-react';
+import { getProfileIssues } from '../domain/evaluate';
+import { buildManualTender, checkTenderFile, validateManualRows, MAX_MANUAL_REQUIREMENTS } from '../domain/validation';
+import type { ManualRow } from '../domain/validation';
+import type { RuleId } from '../domain/types';
+import { Card, DemoBadge, Notice, PageHeader } from '../components/ui';
+import { btn, inputCls } from '../components/styles';
+import StepIndicator from '../components/StepIndicator';
+
+const RULES: RuleId[] = ['construction_license', 'iso9001', 'similar_projects', 'engineering_personnel', 'audited_financials', 'manual_other'];
 
 export default function TenderUpload() {
-  const { setSelectedTender, setAnalysisResults } = useContext(AppContext);
+  const { t, loc } = useI18n();
+  const { profile, startAnalysis } = useApp();
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [mode, setMode] = useState<'sample' | 'manual' | null>(null);
   const [fileName, setFileName] = useState('');
-  const [requirementsText, setRequirementsText] = useState('');
-  const [error, setError] = useState('');
+  const [fileError, setFileError] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [rows, setRows] = useState<ManualRow[]>([{ text: '', ruleId: 'manual_other' }]);
+  const [rowsError, setRowsError] = useState('');
+  const blocked = getProfileIssues(profile).includes('nameMissing');
 
-  const selectFile = (file?: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type !== 'application/pdf')) {
-      setError('Please select a PDF file.');
-      return;
+  const selectFile = async (file?: File | null) => {
+    setChecking(true);
+    setFileError('');
+    const result = await checkTenderFile(file);
+    setChecking(false);
+    if (result.ok && file) {
+      setFileName(file.name);
+    } else {
+      setFileName('');
+      setFileError(result.ok ? '' : result.key);
     }
-    if (file.size > 20 * 1024 * 1024) {
-      setError('Maximum file size is 20 MB.');
-      return;
-    }
-    setFileName(file.name);
-    setMode('manual');
-    setError('');
+    if (inputRef.current) inputRef.current.value = '';
   };
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => selectFile(event.target.files?.[0]);
-  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    selectFile(event.dataTransfer.files[0]);
+  const onChange = (e: ChangeEvent<HTMLInputElement>) => void selectFile(e.target.files?.[0]);
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    void selectFile(e.dataTransfer.files[0]);
   };
 
-  const titles = requirementsText.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 30);
-  const canRun = mode === 'sample' || (mode === 'manual' && !!fileName && titles.length > 0);
-
-  const handleContinue = () => {
-    if (!canRun) return;
-    const tender: Tender = mode === 'sample' ? demoTender : {
-      id: 2,
-      name: `${fileName} — manual review`,
-      mode: 'manual',
-      requirements: titles.map((title, index) => ({ id: index + 1, title, description: title })),
-    };
-    setSelectedTender(tender);
-    setAnalysisResults(createAssessment(tender));
+  const startDemo = () => {
+    startAnalysis(demoTender);
     navigate('/analysis');
   };
 
+  const startManual = () => {
+    let ok = true;
+    if (!fileName) {
+      setFileError('upload.error.missing');
+      ok = false;
+    }
+    const rowErr = validateManualRows(rows);
+    setRowsError(rowErr ?? '');
+    if (rowErr) ok = false;
+    if (!ok) return;
+    startAnalysis(buildManualTender(fileName, rows));
+    navigate('/analysis');
+  };
+
+  const updateRow = (i: number, patch: Partial<ManualRow>) => setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+
   return (
-    <div className="space-y-7 max-w-3xl mx-auto">
-      <div>
-        <span className="inline-flex bg-teal-50 text-teal-700 rounded-full px-3 py-1 text-xs font-semibold mb-2">STEP 2 OF 4 · SELECT A TENDER</span>
-        <h1 className="text-3xl font-bold text-gray-900">Upload or Select Tender</h1>
-        <p className="text-gray-500 mt-1">Try the complete sample assessment, or select your own PDF for a transparent manual review.</p>
-      </div>
+    <div className="space-y-6">
+      <StepIndicator current={1} />
+      <PageHeader title={t('tender.title')} subtitle={t('tender.subtitle')} />
 
-      <div onDrop={handleDrop} onDragOver={e => e.preventDefault()} className={`border-2 border-dashed rounded-2xl p-8 text-center bg-white transition-colors ${mode === 'manual' ? 'border-teal-500' : 'border-gray-300 hover:border-blue-400'}`}>
-        <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4"><Upload size={25} className="text-blue-600" /></div>
-        <p className="font-semibold text-gray-800 mb-1">Drop a PDF here or choose a file</p>
-        <p className="text-sm text-gray-500 mb-4">PDF files only · up to 20 MB · processed locally in your browser</p>
-        <input ref={inputRef} type="file" accept=".pdf,application/pdf" onChange={handleFileChange} className="hidden" aria-label="Select tender PDF" />
-        <button type="button" onClick={() => inputRef.current?.click()} className="px-5 py-2.5 rounded-xl bg-blue-700 text-white text-sm font-semibold hover:bg-blue-800">Browse Files</button>
-        {fileName && mode === 'manual' && <p className="mt-4 text-sm text-teal-700 font-semibold flex items-center justify-center gap-2"><CheckCircle size={17} /> Selected: {fileName}</p>}
-        {error && <p className="mt-3 text-red-600 text-sm flex items-center gap-2 justify-center"><AlertCircle size={16} />{error}</p>}
-      </div>
-
-      {mode === 'manual' && (
-        <div className="bg-white rounded-2xl p-6 border border-teal-200 space-y-3">
-          <h2 className="font-bold text-gray-900">Enter requirements from your PDF</h2>
-          <p className="text-sm text-gray-600">For privacy, this demo does <strong>not</strong> read or upload the PDF. Enter each tender requirement on a separate line; each will start with status UNCLEAR until a specialist reviews it.</p>
-          <textarea aria-label="Tender requirements, one per line" rows={5} value={requirementsText} onChange={e => setRequirementsText(e.target.value)} placeholder={'Valid construction license\nISO 9001 certificate\nThree similar completed projects'} className="w-full rounded-xl border border-gray-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
-          <p className="text-xs text-gray-500">{titles.length} requirements entered (max 30). The file itself stays on your device and is not transmitted or stored.</p>
-        </div>
+      {blocked && (
+        <Notice tone="error" role="alert">
+          <p>{t('profile.issue.nameMissing')}</p>
+          <Link to="/profile" className="mt-2 inline-block font-semibold underline">{t('tender.fixProfile')}</Link>
+        </Notice>
       )}
 
-      <div className="flex items-center gap-4"><div className="flex-1 border-t border-gray-200" /><span className="text-sm text-gray-500 font-medium">OR CHOOSE READY DEMO</span><div className="flex-1 border-t border-gray-200" /></div>
-
-      <button type="button" onClick={() => { setMode('sample'); setError(''); }} className={`w-full text-left bg-white rounded-2xl border-2 shadow-sm p-6 transition-all ${mode === 'sample' ? 'border-blue-600 bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`}>
-        <div className="flex items-start gap-4">
-          <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0"><FileText size={22} className="text-blue-700" /></div>
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2 mb-1"><span className="text-xs font-semibold px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">FICTIONAL DEMO</span><span className="text-xs text-gray-400">DEMO-ASTANA-2026-001</span></div>
-            <h3 className="font-bold text-gray-900">{demoTender.name}</h3>
-            <p className="text-sm text-gray-500 mt-1">{demoTender.requirements.length} requirements · Construction & Engineering</p>
-            <p className="text-xs text-gray-600 mt-3">This demonstration uses sample company records and pre-defined, explainable matching rules. It is not a real AI assessment.</p>
-          </div>
-          {mode === 'sample' && <CheckCircle size={22} className="text-blue-600 flex-shrink-0" />}
+      {/* Predefined demo tender: the fully supported path */}
+      <Card className="border-blue-300">
+        <div className="flex flex-wrap items-center gap-2">
+          <DemoBadge />
+          <span className="text-xs font-semibold text-blue-900">{t('tender.demoBadge')}</span>
+          <span className="font-mono text-xs text-slate-600">{demoTender.code}</span>
         </div>
-      </button>
+        <h2 className="mt-2 flex items-start gap-2 text-lg font-bold text-slate-900">
+          <FileText size={20} className="mt-1 flex-shrink-0 text-blue-700" aria-hidden="true" />
+          {loc(demoTender.name)}
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">{t('tender.demoNote')}</p>
+        <h3 className="mt-4 text-sm font-semibold text-slate-800">{t('tender.requirementsList')}</h3>
+        <ol className="mt-2 space-y-1.5 text-sm">
+          {demoTender.requirements.map((r) => (
+            <li key={r.id} className="flex gap-2 rounded-lg bg-slate-50 px-3 py-2">
+              <span className="font-mono text-xs text-slate-600">{loc(r.reference)}</span>
+              <span className="text-slate-800">{loc(r.title)}</span>
+            </li>
+          ))}
+        </ol>
+        <button type="button" onClick={startDemo} disabled={blocked} className={`${btn.primary} mt-5 w-full sm:w-auto`}>
+          {t('tender.start')} <ArrowRight size={16} aria-hidden="true" />
+        </button>
+      </Card>
 
-      <button onClick={handleContinue} disabled={!canRun} className="w-full flex justify-center items-center gap-2 py-3.5 rounded-xl font-semibold bg-blue-700 text-white hover:bg-blue-800 disabled:bg-gray-200 disabled:text-gray-500">
-        {mode === 'manual' ? 'Start Manual Review' : 'Run Demo Analysis'} <ArrowRight size={18} />
-      </button>
+      <div className="flex items-center gap-4" aria-hidden="true">
+        <div className="flex-1 border-t border-slate-300" />
+        <span className="text-sm font-medium uppercase text-slate-600">{t('tender.or')}</span>
+        <div className="flex-1 border-t border-slate-300" />
+      </div>
+
+      {/* Own tender: honest manual workflow */}
+      <Card>
+        <h2 className="text-lg font-bold text-slate-900">{t('tender.manualTitle')}</h2>
+        <Notice tone="info" className="mt-3">
+          <span className="inline-flex items-start gap-2"><Lock size={14} className="mt-1 flex-shrink-0" aria-hidden="true" />{t('tender.manualNotice')}</span>
+        </Notice>
+
+        <div
+          onDrop={onDrop}
+          onDragOver={(e) => e.preventDefault()}
+          className={`mt-4 rounded-2xl border-2 border-dashed p-6 text-center ${fileName ? 'border-green-600 bg-green-50' : fileError ? 'border-red-500 bg-red-50' : 'border-slate-300 bg-white'}`}
+        >
+          <Upload size={24} className="mx-auto mb-2 text-blue-700" aria-hidden="true" />
+          <p className="font-semibold text-slate-800">{t('upload.drop')}</p>
+          <p className="mb-3 text-sm text-slate-600">{t('upload.hint')}</p>
+          <input
+            ref={inputRef}
+            id="tender-file"
+            type="file"
+            accept=".pdf,application/pdf"
+            onChange={onChange}
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            data-testid="tender-file-input"
+          />
+          <button
+            type="button"
+            className={btn.primary}
+            onClick={() => inputRef.current?.click()}
+            aria-label={`${t('upload.browse')} — ${t('upload.fileLabel')}`}
+            aria-describedby={fileError ? 'file-error' : undefined}
+          >
+            {t('upload.browse')}
+          </button>
+          <div aria-live="polite" className="mt-3 text-sm">
+            {checking && <p className="inline-flex items-center gap-2 text-slate-700"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t('upload.checking')}</p>}
+            {fileName && !checking && (
+              <p className="inline-flex flex-wrap items-center justify-center gap-2 font-semibold text-green-800">
+                <CheckCircle2 size={16} aria-hidden="true" /> {t('upload.selected', { name: fileName })}
+                <button type="button" className="text-xs font-semibold text-red-800 underline" onClick={() => setFileName('')}>{t('upload.remove')}</button>
+              </p>
+            )}
+          </div>
+          {fileError && (
+            <div id="file-error" role="alert" className="mt-2 text-sm text-red-800">
+              <p className="font-semibold">{t(fileError)}</p>
+              <button type="button" onClick={startDemo} disabled={blocked} className="mt-1 font-semibold text-blue-800 underline">{t('upload.recover')}</button>
+            </div>
+          )}
+        </div>
+
+        <fieldset className="mt-5 space-y-3">
+          <legend className="text-sm font-semibold text-slate-800">{t('tender.requirementsList')}</legend>
+          {rows.map((row, i) => (
+            <div key={i} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_16rem_auto] sm:items-end">
+              <div>
+                <label htmlFor={`req-${i}`} className="block text-xs font-semibold text-slate-700">{t('manual.reqLabel', { n: i + 1 })}</label>
+                <input id={`req-${i}`} className={inputCls} value={row.text} maxLength={300} placeholder={t('manual.placeholder')} onChange={(e) => updateRow(i, { text: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor={`rule-${i}`} className="block text-xs font-semibold text-slate-700">{t('manual.ruleLabel', { n: i + 1 })}</label>
+                <select id={`rule-${i}`} className={inputCls} value={row.ruleId} onChange={(e) => updateRow(i, { ruleId: e.target.value as RuleId })}>
+                  {RULES.map((r) => <option key={r} value={r}>{t(`rule.${r}`)}</option>)}
+                </select>
+              </div>
+              <button
+                type="button"
+                disabled={rows.length === 1}
+                onClick={() => setRows((r) => r.filter((_, j) => j !== i))}
+                className="inline-flex items-center justify-center rounded-lg p-2 text-red-800 hover:bg-red-50 disabled:opacity-40"
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                <span className="sr-only">{t('manual.removeRow', { n: i + 1 })}</span>
+              </button>
+            </div>
+          ))}
+          <button type="button" className={btn.ghost} disabled={rows.length >= MAX_MANUAL_REQUIREMENTS} onClick={() => setRows((r) => [...r, { text: '', ruleId: 'manual_other' }])}>
+            <Plus size={15} aria-hidden="true" /> {t('manual.addRow')}
+          </button>
+          {rowsError && <p role="alert" className="text-sm font-semibold text-red-800">{t(rowsError)}</p>}
+        </fieldset>
+
+        <button type="button" onClick={startManual} disabled={blocked} className={`${btn.secondary} mt-5 w-full sm:w-auto`}>
+          {t('manual.start')} <ArrowRight size={16} aria-hidden="true" />
+        </button>
+      </Card>
     </div>
   );
 }

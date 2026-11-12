@@ -1,115 +1,193 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import type { FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { Download, Trash2 } from 'lucide-react';
+import { useI18n } from '../i18n/useI18n';
+import type { FeedbackEntry } from '../domain/types';
+import { PARTICIPANT_CODE, clearFeedback, downloadText, loadFeedback, saveFeedback, toCsv } from '../lib/feedback';
+import { todayIso } from '../lib/dates';
+import { Card, ConfirmAction, Notice, PageHeader } from '../components/ui';
+import { btn, inputCls } from '../components/styles';
+import StepIndicator from '../components/StepIndicator';
+
+type RatingKey = 'usefulness' | 'easeOfUse' | 'statusClarity' | 'trust';
+const RATINGS: { key: RatingKey; label: string }[] = [
+  { key: 'usefulness', label: 'feedback.usefulness' },
+  { key: 'easeOfUse', label: 'feedback.ease' },
+  { key: 'statusClarity', label: 'feedback.clarity' },
+  { key: 'trust', label: 'feedback.trust' },
+];
+
+type FormState = {
+  participantCode: string;
+  taskCompleted: '' | FeedbackEntry['taskCompleted'];
+  ratings: Record<RatingKey, number>;
+  comments: string;
+  suggestions: string;
+  consent: boolean;
+};
+const EMPTY: FormState = {
+  participantCode: '',
+  taskCompleted: '',
+  ratings: { usefulness: 0, easeOfUse: 0, statusClarity: 0, trust: 0 },
+  comments: '',
+  suggestions: '',
+  consent: false,
+};
 
 export default function FeedbackPage() {
-  const navigate = useNavigate();
-  const [submitted, setSubmitted] = useState(false);
-  const [form, setForm] = useState({
-    usefulnessRating: '',
-    easeOfUseRating: '',
-    missingClear: '',
-    sourcesUnderstandable: '',
-    comments: '',
-    suggestions: '',
-  });
+  const { t, lang } = useI18n();
+  const [form, setForm] = useState<FormState>(EMPTY);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [result, setResult] = useState<'saved' | 'failed' | null>(null);
+  const [entries, setEntries] = useState(loadFeedback);
+  const [cleared, setCleared] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (form.participantCode && !PARTICIPANT_CODE.test(form.participantCode.trim().toUpperCase())) e.participantCode = t('feedback.participantError');
+    if (!form.taskCompleted) e.taskCompleted = t('feedback.choiceRequired');
+    RATINGS.forEach((r) => {
+      if (!form.ratings[r.key]) e[r.key] = t('feedback.ratingRequired');
+    });
+    if (!form.consent) e.consent = t('feedback.consentRequired');
+    return e;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Store feedback locally
-    const existing = JSON.parse(localStorage.getItem('taf_feedback') || '[]');
-    existing.push({ ...form, timestamp: new Date().toISOString() });
-    localStorage.setItem('taf_feedback', JSON.stringify(existing));
-    setSubmitted(true);
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    const e = validate();
+    setErrors(e);
+    if (Object.keys(e).length > 0) return;
+    const entry: FeedbackEntry = {
+      id: `fb-${Date.now().toString(36)}`,
+      participantCode: form.participantCode.trim().toUpperCase(),
+      language: lang,
+      taskCompleted: form.taskCompleted as FeedbackEntry['taskCompleted'],
+      usefulness: form.ratings.usefulness,
+      easeOfUse: form.ratings.easeOfUse,
+      statusClarity: form.ratings.statusClarity,
+      trust: form.ratings.trust,
+      comments: form.comments.trim().slice(0, 2000),
+      suggestions: form.suggestions.trim().slice(0, 2000),
+      submittedAt: new Date().toISOString(),
+    };
+    const ok = saveFeedback(entry);
+    setResult(ok ? 'saved' : 'failed');
+    if (ok) {
+      setEntries(loadFeedback());
+      setForm(EMPTY);
+      setCleared(false);
+    }
   };
 
-  if (submitted) {
-    return (
-      <section className="max-w-xl mx-auto space-y-4 text-center">
-        <div className="p-8 bg-green-50 border border-green-200 rounded-lg">
-          <h2 className="text-2xl font-bold text-green-700 mb-2">Thank you for your feedback!</h2>
-          <p className="text-gray-600 mb-4">Your response has been saved locally in your browser.</p>
-          <p className="text-sm text-gray-400 mb-6">Note: Feedback is stored locally and is not automatically sent to the team.</p>
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="px-6 py-2 bg-blue-700 text-white rounded-lg hover:bg-blue-800 transition"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-      </section>
-    );
-  }
+  const errorText = (k: string) =>
+    errors[k] ? <p id={`${k}-error`} className="mt-1 text-xs font-semibold text-red-800">{errors[k]}</p> : null;
+  const describedBy = (k: string) => (errors[k] ? `${k}-error` : undefined);
 
   return (
-    <section className="max-w-xl mx-auto space-y-6">
-      <h2 className="text-2xl font-bold text-blue-800">Feedback</h2>
-      <p className="text-gray-600 text-sm">Your feedback helps improve Tender AI Fit. Responses are stored locally in your browser only.</p>
+    <div className="space-y-6">
+      <StepIndicator current={4} />
+      <PageHeader title={t('feedback.title')} subtitle={t('feedback.subtitle')} />
+      <Notice tone="info">{t('feedback.storage')}</Notice>
 
-      <form onSubmit={handleSubmit} className="space-y-4 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+      <div aria-live="polite">
+        {result === 'saved' && (
+          <Notice tone="success" role="status">
+            <p className="font-semibold">{t('feedback.thanks')}</p>
+            <div className="mt-2 flex flex-wrap gap-3">
+              <button type="button" className="font-semibold underline" onClick={() => setResult(null)}>{t('feedback.another')}</button>
+              <Link to="/dashboard" className="font-semibold underline">{t('nav.dashboard')}</Link>
+            </div>
+          </Notice>
+        )}
+        {result === 'failed' && <Notice tone="error" role="alert">{t('feedback.saveFailed')}</Notice>}
+      </div>
 
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Overall Usefulness (1–5)</label>
-          <select name="usefulnessRating" required value={form.usefulnessRating} onChange={handleChange}
-            className="w-full border border-gray-300 rounded-lg p-2">
-            <option value="">Select rating</option>
-            {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
+      {result !== 'saved' && (
+        <Card>
+          <form onSubmit={submit} noValidate className="space-y-5" aria-label={t('feedback.title')}>
+            {Object.keys(errors).length > 0 && <Notice tone="error" role="alert">{t('feedback.errors')}</Notice>}
+
+            <div className="max-w-xs">
+              <label htmlFor="fb-code" className="block text-sm font-semibold text-slate-800">{t('feedback.participant')}</label>
+              <input id="fb-code" className={inputCls} value={form.participantCode} maxLength={3} placeholder="P01"
+                aria-invalid={!!errors.participantCode} aria-describedby={describedBy('participantCode')}
+                onChange={(e) => setForm({ ...form, participantCode: e.target.value })} />
+              {errorText('participantCode')}
+            </div>
+
+            <fieldset aria-describedby={describedBy('taskCompleted')}>
+              <legend className="text-sm font-semibold text-slate-800">{t('feedback.task')} <span className="font-normal text-slate-600">({t('common.required')})</span></legend>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(['yes', 'with_help', 'no'] as const).map((v) => (
+                  <label key={v} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm ${form.taskCompleted === v ? 'border-blue-700 bg-blue-50' : 'border-slate-300 bg-white'}`}>
+                    <input type="radio" name="taskCompleted" value={v} checked={form.taskCompleted === v} onChange={() => setForm({ ...form, taskCompleted: v })} />
+                    {t(`feedback.task.${v}`)}
+                  </label>
+                ))}
+              </div>
+              {errorText('taskCompleted')}
+            </fieldset>
+
+            {RATINGS.map((r) => (
+              <fieldset key={r.key} aria-describedby={describedBy(r.key)}>
+                <legend className="text-sm font-semibold text-slate-800">
+                  {t(r.label)} <span className="font-normal text-slate-600">({t('common.required')} · {t('feedback.scale')})</span>
+                </legend>
+                <div className="mt-2 flex gap-2">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <label key={n} className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border text-sm font-semibold has-[:focus-visible]:outline has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-blue-700 ${form.ratings[r.key] === n ? 'border-blue-800 bg-blue-800 text-white' : 'border-slate-300 bg-white text-slate-800'}`}>
+                      <input type="radio" className="sr-only" name={r.key} value={n} checked={form.ratings[r.key] === n}
+                        onChange={() => setForm({ ...form, ratings: { ...form.ratings, [r.key]: n } })} />
+                      {n}
+                    </label>
+                  ))}
+                </div>
+                {errorText(r.key)}
+              </fieldset>
+            ))}
+
+            <div>
+              <label htmlFor="fb-comments" className="block text-sm font-semibold text-slate-800">{t('feedback.comments')}</label>
+              <textarea id="fb-comments" rows={3} maxLength={2000} className={inputCls} value={form.comments} onChange={(e) => setForm({ ...form, comments: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="fb-suggestions" className="block text-sm font-semibold text-slate-800">{t('feedback.suggestions')}</label>
+              <textarea id="fb-suggestions" rows={3} maxLength={2000} className={inputCls} value={form.suggestions} onChange={(e) => setForm({ ...form, suggestions: e.target.value })} />
+            </div>
+            <div>
+              <label className="flex items-start gap-2 text-sm text-slate-800">
+                <input type="checkbox" className="mt-1 h-4 w-4" checked={form.consent} aria-invalid={!!errors.consent} aria-describedby={describedBy('consent')}
+                  onChange={(e) => setForm({ ...form, consent: e.target.checked })} />
+                {t('feedback.consent')}
+              </label>
+              {errorText('consent')}
+            </div>
+            <button type="submit" className={`${btn.primary} w-full py-3 sm:w-auto`}>{t('feedback.submit')}</button>
+          </form>
+        </Card>
+      )}
+
+      <Card>
+        <h2 className="font-bold text-slate-900">{t('feedback.teamTitle')}</h2>
+        <p className="mt-1 text-sm text-slate-700" data-testid="feedback-count">{t('feedback.count', { count: entries.length })}</p>
+        {cleared && <p role="status" className="mt-1 text-sm text-green-800">{t('feedback.cleared')}</p>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" className={btn.secondary} disabled={entries.length === 0}
+            onClick={() => downloadText(`tender-ai-fit-feedback-${todayIso()}.csv`, toCsv(entries), 'text/csv;charset=utf-8')}>
+            <Download size={16} aria-hidden="true" /> {t('feedback.exportCsv')}
+          </button>
+          <button type="button" className={btn.secondary} disabled={entries.length === 0}
+            onClick={() => downloadText(`tender-ai-fit-feedback-${todayIso()}.json`, JSON.stringify(entries, null, 2), 'application/json')}>
+            <Download size={16} aria-hidden="true" /> {t('feedback.exportJson')}
+          </button>
+          {entries.length > 0 && (
+            <ConfirmAction label={t('feedback.clear')} question={t('feedback.clearConfirm')} icon={<Trash2 size={16} aria-hidden="true" />}
+              onConfirm={() => { clearFeedback(); setEntries([]); setCleared(true); }} />
+          )}
         </div>
-
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Ease of Use (1–5)</label>
-          <select name="easeOfUseRating" required value={form.easeOfUseRating} onChange={handleChange}
-            className="w-full border border-gray-300 rounded-lg p-2">
-            <option value="">Select rating</option>
-            {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Were missing requirements clearly shown?</label>
-          <select name="missingClear" required value={form.missingClear} onChange={handleChange}
-            className="w-full border border-gray-300 rounded-lg p-2">
-            <option value="">Select answer</option>
-            <option value="yes">Yes</option>
-            <option value="partly">Partly</option>
-            <option value="no">No</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Were source references understandable?</label>
-          <select name="sourcesUnderstandable" required value={form.sourcesUnderstandable} onChange={handleChange}
-            className="w-full border border-gray-300 rounded-lg p-2">
-            <option value="">Select answer</option>
-            <option value="yes">Yes</option>
-            <option value="partly">Partly</option>
-            <option value="no">No</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Open-ended comments</label>
-          <textarea name="comments" value={form.comments} onChange={handleChange} rows={3}
-            placeholder="Share your thoughts..."
-            className="w-full border border-gray-300 rounded-lg p-2" />
-        </div>
-
-        <div>
-          <label className="block font-semibold text-gray-700 mb-1">Suggestions for improvement</label>
-          <textarea name="suggestions" value={form.suggestions} onChange={handleChange} rows={3}
-            placeholder="What would you like to see improved?"
-            className="w-full border border-gray-300 rounded-lg p-2" />
-        </div>
-
-        <button type="submit"
-          className="w-full py-2 bg-blue-700 text-white rounded-lg hover:bg-blue-800 transition font-semibold">
-          Submit Feedback
-        </button>
-      </form>
-    </section>
+      </Card>
+    </div>
   );
 }

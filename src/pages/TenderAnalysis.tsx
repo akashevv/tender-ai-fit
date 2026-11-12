@@ -1,83 +1,248 @@
-import { useContext, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { AppContext } from '../context/AppContext';
-import type { AnalysisResult } from '../context/AppContext';
-import { CheckCircle, AlertTriangle, HelpCircle, ChevronDown, ChevronUp, ArrowRight, Edit3 } from 'lucide-react';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowRight, ChevronDown, ChevronUp, Pencil, CheckSquare, Square } from 'lucide-react';
+import { useI18n } from '../i18n/useI18n';
+import { useApp } from '../context/appState';
+import { finalStatus, getProfileIssues, summarise } from '../domain/evaluate';
+import type { EvaluationResult, Requirement, Review, Status } from '../domain/types';
+import { Card, Notice, PageHeader, StatusBadge } from '../components/ui';
+import { STATUS_STYLE, btn, inputCls } from '../components/styles';
+import EvidenceList from '../components/EvidenceList';
+import StepIndicator from '../components/StepIndicator';
 
-function StatusBadge({ status }: { status: AnalysisResult['status'] }) {
-  const styles = {
-    MET: 'bg-green-100 text-green-800',
-    MISSING: 'bg-red-100 text-red-800',
-    UNCLEAR: 'bg-amber-100 text-amber-800',
-  };
-  const Icon = status === 'MET' ? CheckCircle : status === 'MISSING' ? AlertTriangle : HelpCircle;
-  return <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${styles[status]}`}><Icon size={12}/>{status}</span>;
-}
+const STATUSES: Status[] = ['MET', 'MISSING', 'UNCLEAR'];
 
-export default function TenderAnalysis() {
-  const { selectedTender, setAnalysisResults, analysisResults } = useContext(AppContext);
-  const navigate = useNavigate();
-  const [expanded, setExpanded] = useState<number | null>(1);
-  const [warning, setWarning] = useState<number | null>(null);
+function RequirementCard({
+  req,
+  result,
+  review,
+  asOf,
+  open,
+  onToggle,
+}: {
+  req: Requirement;
+  result: EvaluationResult;
+  review: Review;
+  asOf: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { t, loc } = useI18n();
+  const { updateReview } = useApp();
+  const [noteWarning, setNoteWarning] = useState(false);
+  const status = finalStatus(result, review);
+  const panelId = `req-panel-${req.id}`;
 
-  if (!selectedTender || !analysisResults) {
-    return <div className="text-center py-16"><p className="text-gray-500 mb-4">No assessment selected.</p><Link to="/upload" className="text-blue-700 hover:underline">← Choose a tender</Link></div>;
-  }
-
-  const update = (id: number, patch: Partial<AnalysisResult>) => {
-    setAnalysisResults(analysisResults.map(r => r.requirementId === id ? { ...r, ...patch } : r));
-  };
-  const overrideStatus = (r: AnalysisResult, newStatus: AnalysisResult['status']) => {
-    if (!r.reviewerNote?.trim()) { setWarning(r.requirementId); return; }
-    setWarning(null);
-    update(r.requirementId, { status: newStatus, reviewerOverride: true, reviewed: true });
+  const override = (s: Status) => {
+    if (!review.note.trim()) {
+      setNoteWarning(true);
+      return;
+    }
+    setNoteWarning(false);
+    updateReview(req.id, { override: s === result.status ? undefined : s, reviewed: true });
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <span className="inline-flex bg-blue-50 text-blue-700 rounded-full px-3 py-1 text-xs font-semibold mb-2">STEP 3 OF 4 · {selectedTender.mode === 'demo' ? 'DEMO ASSESSMENT' : 'MANUAL REVIEW'}</span>
-          <h1 className="text-3xl font-bold text-gray-900">Tender Analysis</h1>
-          <p className="text-gray-500 mt-1 text-sm">{selectedTender.name}</p>
-        </div>
-        <button onClick={() => navigate('/results')} className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-700 text-white font-semibold rounded-xl hover:bg-blue-800">View Results <ArrowRight size={16}/></button>
-      </div>
-      <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-4">
-        <strong>{selectedTender.mode === 'demo' ? 'Simulated assessment.' : 'Manual review only.'}</strong> {selectedTender.mode === 'demo' ? 'Statuses come from fictional tender requirements, sample metadata and deterministic rules, not live AI or verified source documents.' : 'Your PDF is not parsed or uploaded. All manually entered requirements start UNCLEAR until you assess them.'} The final eligibility decision belongs to a qualified specialist.
-      </p>
-      <div className="flex flex-wrap gap-2 text-sm text-gray-600">
-        <span className="rounded-lg px-3 py-2 bg-white border border-gray-200">{analysisResults.length} requirements</span>
-        <span className="rounded-lg px-3 py-2 bg-white border border-gray-200">{analysisResults.filter(r => r.reviewed).length} reviewed</span>
-        <span className="rounded-lg px-3 py-2 bg-white border border-gray-200">{analysisResults.filter(r => r.status === 'MISSING').length} missing</span>
-      </div>
-      <div className="space-y-3">
-        {selectedTender.requirements.map(req => {
-          const result = analysisResults.find(r => r.requirementId === req.id);
-          if (!result) return null;
-          const open = expanded === req.id;
-          const borderColor = result.status === 'MET' ? 'border-green-200' : result.status === 'MISSING' ? 'border-red-200' : 'border-amber-200';
-          return (
-            <div key={req.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${borderColor}`}>
-              <button type="button" className="w-full flex items-center justify-between gap-3 p-5 text-left hover:bg-gray-50" aria-expanded={open} onClick={() => setExpanded(open ? null : req.id)}>
-                <div className="flex items-center gap-3 min-w-0"><span className="text-xs text-gray-400 font-mono">{req.id}.</span><span className="font-semibold text-gray-900 text-sm">{req.title}</span></div>
-                <span className="flex items-center gap-2 flex-shrink-0"><StatusBadge status={result.status}/>{open ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}</span>
-              </button>
-              {open && <div className="px-5 pb-5 space-y-4 border-t border-gray-100">
-                <div className="pt-4"><p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Original requirement</p><p className="text-sm text-gray-800">{req.description}</p></div>
-                <div><p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Evidence reference</p><p className="text-sm text-gray-800">{result.evidence || 'No verified evidence reference'}</p><p className="text-xs text-gray-500 mt-1">{result.source}</p></div>
-                <div><p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Why this status?</p><p className="text-sm text-gray-700">{result.explanation}</p></div>
-                {result.reviewerOverride && <p className="text-xs rounded-lg bg-blue-50 p-3 text-blue-800">Status updated by the reviewer. See the reviewer note for the reason.</p>}
-                <div><label htmlFor={`review-note-${req.id}`} className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 block">Reviewer notes / justification</label><textarea id={`review-note-${req.id}`} rows={3} value={result.reviewerNote || ''} onChange={e => update(req.id, { reviewerNote: e.target.value })} placeholder="Why does the evidence support your decision?" className="w-full text-sm border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-300"/></div>
-                <div><p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1"><Edit3 size={12}/> Change status (requires a note)</p><div className="flex gap-2 flex-wrap">{(['MET', 'MISSING', 'UNCLEAR'] as const).map(s => <button key={s} type="button" onClick={() => overrideStatus(result, s)} className={`rounded-lg text-xs font-semibold px-3 py-2 border ${result.status === s ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'}`}>{s}</button>)}<button type="button" onClick={() => update(req.id, { reviewed: !result.reviewed })} className="rounded-lg text-xs font-semibold px-3 py-2 border border-gray-300 hover:bg-gray-100">{result.reviewed ? '✓ Reviewed' : 'Mark reviewed'}</button></div>
-                  {warning === req.id && <p className="text-xs mt-2 text-red-600" role="alert">Write a reviewer note explaining your decision before changing the status.</p>}
-                </div>
-              </div>}
+    <li data-testid={`requirement-${req.id}`} data-status={status} className={`overflow-hidden rounded-2xl border border-l-4 border-slate-200 bg-white shadow-sm ${STATUS_STYLE[status].card}`}>
+      <h2>
+        <button type="button" aria-expanded={open} aria-controls={panelId} onClick={onToggle} className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-slate-50 sm:p-5">
+          <span className="min-w-0">
+            <span className="block text-xs font-mono text-slate-600">{loc(req.reference)}</span>
+            <span className="block font-semibold text-slate-900">{loc(req.title)}</span>
+          </span>
+          <span className="flex flex-shrink-0 items-center gap-2">
+            {review.reviewed && <span className="hidden text-xs font-semibold text-blue-800 sm:inline">✓ {t('review.reviewed')}</span>}
+            <StatusBadge status={status} />
+            {open ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
+          </span>
+        </button>
+      </h2>
+      {open && (
+        <div id={panelId} className="space-y-4 border-t border-slate-100 px-4 pb-5 pt-4 sm:px-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">{t('req.description')}</h3>
+              <p className="mt-1 text-sm text-slate-800">{loc(req.description)}</p>
+              <p className="mt-2 text-xs text-slate-600">{t('req.rule')}: {t(`rule.${req.ruleId}`)}</p>
             </div>
-          );
-        })}
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">{t('req.why')}</h3>
+              <p className="mt-1 text-sm text-slate-800" data-testid="reason">{t(result.reasonKey, result.params)}</p>
+            </div>
+          </div>
+          <div>
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">{t('req.evidence')}</h3>
+            <EvidenceList items={result.evidence} asOf={asOf} />
+          </div>
+          <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-950">
+            <span className="font-semibold">{t('req.next')}: </span>
+            {t(result.actionKey, result.params)}
+          </div>
+
+          <fieldset className="space-y-3 rounded-xl border border-slate-200 p-4">
+            <legend className="px-1 text-sm font-semibold text-slate-900">{t('review.title')}</legend>
+            {review.override && (
+              <p className="text-xs text-slate-700">
+                {t('req.automated')}: <StatusBadge status={result.status} /> → {t('req.final')}: <StatusBadge status={review.override} />
+              </p>
+            )}
+            <div>
+              <label htmlFor={`note-${req.id}`} className="block text-xs font-semibold text-slate-700">{t('review.note')}</label>
+              <textarea
+                id={`note-${req.id}`}
+                rows={2}
+                maxLength={1000}
+                className={inputCls}
+                value={review.note}
+                placeholder={t('review.notePlaceholder')}
+                aria-describedby={noteWarning ? `note-warn-${req.id}` : undefined}
+                onChange={(e) => {
+                  updateReview(req.id, { note: e.target.value });
+                  if (e.target.value.trim()) setNoteWarning(false);
+                }}
+              />
+            </div>
+            <div>
+              <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-slate-700"><Pencil size={12} aria-hidden="true" /> {t('review.override')}</p>
+              <div className="flex flex-wrap gap-2">
+                {STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    aria-pressed={status === s}
+                    onClick={() => override(s)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${status === s ? 'border-blue-800 bg-blue-800 text-white' : 'border-slate-300 bg-white text-slate-800 hover:border-blue-500'}`}
+                  >
+                    {t(`status.${s}`)}
+                  </button>
+                ))}
+                {review.override && (
+                  <button type="button" className="rounded-lg px-3 py-1.5 text-xs font-semibold text-blue-800 underline" onClick={() => updateReview(req.id, { override: undefined })}>
+                    {t('review.clearOverride')}
+                  </button>
+                )}
+              </div>
+              {noteWarning && <p id={`note-warn-${req.id}`} role="alert" className="mt-2 text-xs font-semibold text-red-800">{t('review.noteRequired')}</p>}
+            </div>
+            <button
+              type="button"
+              aria-pressed={review.reviewed}
+              onClick={() => updateReview(req.id, { reviewed: !review.reviewed })}
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${review.reviewed ? 'border-blue-700 bg-blue-50 text-blue-900' : 'border-slate-300 bg-white text-slate-800'}`}
+            >
+              {review.reviewed ? <CheckSquare size={16} aria-hidden="true" /> : <Square size={16} aria-hidden="true" />}
+              {review.reviewed ? t('review.reviewed') : t('review.markReviewed')}
+            </button>
+            {review.override && <p className="text-xs text-blue-900">{t('review.overridden')}</p>}
+          </fieldset>
+        </div>
+      )}
+    </li>
+  );
+}
+
+export default function TenderAnalysis() {
+  const { t, loc } = useI18n();
+  const { analysis, results, profile } = useApp();
+  const [filter, setFilter] = useState<Status | 'ALL'>('ALL');
+  const [openIds, setOpenIds] = useState<Set<string>>(() => new Set(analysis?.tender.requirements[0] ? [analysis.tender.requirements[0].id] : []));
+
+  if (!analysis) {
+    return (
+      <div className="space-y-6">
+        <StepIndicator current={2} />
+        <Card className="text-center">
+          <p className="text-slate-700">{t('analysis.empty')}</p>
+          <Link to="/tender" className={`${btn.primary} mt-4`}>{t('nav.tender')} <ArrowRight size={16} aria-hidden="true" /></Link>
+        </Card>
       </div>
-      <button onClick={() => navigate('/results')} className="w-full flex items-center justify-center gap-2 py-3.5 bg-blue-700 text-white font-semibold rounded-xl hover:bg-blue-800">Proceed to Results <ArrowRight size={18}/></button>
+    );
+  }
+
+  if (getProfileIssues(profile).includes('nameMissing')) {
+    return (
+      <div className="space-y-6">
+        <StepIndicator current={2} />
+        <Notice tone="error" role="alert">
+          <p>{t('profile.issue.nameMissing')}</p>
+          <Link to="/profile" className="mt-2 inline-block font-semibold underline">{t('tender.fixProfile')}</Link>
+        </Notice>
+      </div>
+    );
+  }
+
+  const review = (id: string): Review => analysis.reviews[id] ?? { note: '', reviewed: false };
+  const statuses = results.map((r) => finalStatus(r, analysis.reviews[r.requirementId]));
+  const summary = summarise(statuses);
+  const reviewed = results.filter((r) => review(r.requirementId).reviewed).length;
+  const visible = analysis.tender.requirements.filter((_req, i) => filter === 'ALL' || statuses[i] === filter);
+
+  const toggle = (id: string) =>
+    setOpenIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="space-y-6">
+      <StepIndicator current={2} />
+      <PageHeader
+        eyebrow={<span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-900">{t(`analysis.mode.${analysis.tender.mode}`)}</span>}
+        title={t('analysis.title')}
+        subtitle={<><span className="block font-medium text-slate-800">{loc(analysis.tender.name)}</span>{t('analysis.subtitle')}</>}
+        actions={<Link to="/report" className={btn.primary}>{t('analysis.toReport')} <ArrowRight size={16} aria-hidden="true" /></Link>}
+      />
+
+      <Notice tone="info">
+        <p>{t('analysis.ruleNotice')} {t('analysis.asOf', { date: analysis.asOf })}</p>
+        <p className="mt-1 font-medium">{t('human.review')}</p>
+      </Notice>
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between" data-testid="analysis-summary">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-semibold text-slate-900">{t('report.total')}: <span data-testid="count-total">{summary.total}</span></span>
+          <span className="text-slate-400" aria-hidden="true">|</span>
+          {STATUSES.map((s) => (
+            <span key={s} className="inline-flex items-center gap-1">
+              <StatusBadge status={s} /> <strong data-testid={`count-${s}`}>{summary[s === 'MET' ? 'met' : s === 'MISSING' ? 'missing' : 'unclear']}</strong>
+            </span>
+          ))}
+        </div>
+        <span className="text-sm text-slate-700">
+          {t('report.readiness')}: <strong data-testid="readiness">{summary.readiness}%</strong> · {t('analysis.reviewedCount', { reviewed, total: summary.total })}
+        </span>
+      </div>
+
+      <div role="group" aria-label={t('analysis.filter')} className="flex flex-wrap gap-2">
+        {(['ALL', ...STATUSES] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            aria-pressed={filter === f}
+            onClick={() => setFilter(f)}
+            className={`rounded-full border px-3 py-1.5 text-sm font-medium ${filter === f ? 'border-blue-800 bg-blue-800 text-white' : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'}`}
+          >
+            {f === 'ALL' ? t('analysis.filter.all') : t(`status.${f}`)}
+          </button>
+        ))}
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="text-sm text-slate-600">{t('analysis.noMatches')}</p>
+      ) : (
+        <ul className="space-y-3">
+          {visible.map((req) => {
+            const result = results.find((r) => r.requirementId === req.id)!;
+            return (
+              <RequirementCard key={req.id} req={req} result={result} review={review(req.id)} asOf={analysis.asOf} open={openIds.has(req.id)} onToggle={() => toggle(req.id)} />
+            );
+          })}
+        </ul>
+      )}
+
+      <Link to="/report" className={`${btn.primary} w-full py-3.5`}>{t('analysis.toReport')} <ArrowRight size={18} aria-hidden="true" /></Link>
     </div>
   );
 }
