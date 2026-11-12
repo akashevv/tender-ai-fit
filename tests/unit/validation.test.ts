@@ -85,7 +85,8 @@ describe('deployment files', () => {
     for (const f of ['package.json', 'package-lock.json', 'vercel.json', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json']) {
       const bytes = readFileSync(new URL(`../../${f}`, import.meta.url));
       expect(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf, f).toBe(false);
-      expect(() => JSON.parse(bytes.toString('utf8')), f).not.toThrow();
+      // tsconfig files may contain comments (JSONC); the others must be strict JSON.
+      if (!f.startsWith('tsconfig')) expect(() => JSON.parse(bytes.toString('utf8')), f).not.toThrow();
     }
   });
 });
